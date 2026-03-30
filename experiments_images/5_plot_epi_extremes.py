@@ -78,12 +78,20 @@ HEATMAP_BLUR_SIGMA: float = 0.0  # 0 uses an automatic sigma based on kernel siz
 HEATMAP_BLEND_ON_IMAGE: bool = True
 HEATMAP_ALPHA: float = 0.95  # 0 = only image, 1 = only heatmap
 SUBPLOT_WSPACE: float = 0.04
+SINGLE_SUBPLOT_WSPACE: float = 0.04
 SUBPLOT_TOP: float = 0.92
+SINGLE_SUBPLOT_TOP: float = 0.88
 SUBPLOT_LEFT: float = 0.08
+SINGLE_TILE_WIDTH: float = 2.2
+SINGLE_GROUP_SPACER_RATIO: float = 0.10
 CLASS_LABEL_DISPLAY: dict[str, str] = {
     "Tomato_healthy": "Healthy",
     "Tomato_Healthy": "Healthy",
     "Tomato_Late_blight": "Blight",
+}
+GROUP_LABEL_DISPLAY: dict[str, str] = {
+    "low": "Low-epistemic",
+    "high": "High-epistemic",
 }
 OUTPUT_DPI: int = 150
 PDF_DPI: int = 50
@@ -509,6 +517,26 @@ def plot_extremes(
     def format_sigma_label(sigma: float) -> str:
         return "clean" if sigma == 0.0 else f"σ={sigma}"
 
+    def build_output_path(suffix: str) -> Path:
+        output_path = RESULTS_DIR / OUTPUT_NAME
+        if not suffix:
+            return output_path
+        stem = output_path.stem
+        if stem.endswith("_ig_sg"):
+            stem = stem[: -len("_ig_sg")]
+        return output_path.with_name(f"{stem}{suffix}{output_path.suffix}")
+
+    def save_figure(fig_to_save: plt.Figure, out_path: Path) -> None:
+        is_pdf = out_path.suffix.lower() == ".pdf"
+        save_dpi = PDF_DPI if is_pdf else OUTPUT_DPI
+        save_kwargs = {"dpi": save_dpi, "bbox_inches": "tight"}
+        if is_pdf:
+            with plt.rc_context({"pdf.compression": PDF_COMPRESSION}):
+                fig_to_save.savefig(out_path, **save_kwargs)
+        else:
+            fig_to_save.savefig(out_path, **save_kwargs)
+        print(f"Saved plot to {out_path}")
+
     def add_column_labels(fig: plt.Figure) -> None:
         y_top = axes[0, image_col].get_position().y1
         label_y = min(y_top + 0.03, 0.98)
@@ -566,6 +594,8 @@ def plot_extremes(
                     transform=fig.transFigure,
                     color=SEPARATOR_COLOR,
                     linewidth=SEPARATOR_LW,
+                    zorder=1000,
+                    clip_on=False,
                 )
             )
 
@@ -655,17 +685,192 @@ def plot_extremes(
     )
     add_group_separators(fig)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = RESULTS_DIR / OUTPUT_NAME
-    is_pdf = out_path.suffix.lower() == ".pdf"
-    save_dpi = PDF_DPI if is_pdf else OUTPUT_DPI
-    save_kwargs = {"dpi": save_dpi, "bbox_inches": "tight"}
-    if is_pdf:
-        with plt.rc_context({"pdf.compression": PDF_COMPRESSION}):
-            plt.savefig(out_path, **save_kwargs)
-    else:
-        plt.savefig(out_path, **save_kwargs)
+    out_path = build_output_path("")
+    save_figure(fig, out_path)
     plt.close(fig)
-    print(f"Saved plot to {out_path}")
+
+    def render_single_method(
+        method_name: str,
+        attr_index: int,
+        vmin: float,
+        vmax: float,
+        out_suffix: str,
+    ) -> None:
+        selected_label_names = [
+            build_label_name(idx, labels[idx], label_names, class_names)
+            for _, idx in selected
+        ]
+        ordered_classes: list[str] = []
+        for class_key in ROW_CLASS_ORDER:
+            for label_name in selected_label_names:
+                if class_key_matches(class_key, label_name) and label_name not in ordered_classes:
+                    ordered_classes.append(label_name)
+        for label_name in selected_label_names:
+            if label_name not in ordered_classes:
+                ordered_classes.append(label_name)
+
+        ordered_groups: list[str] = []
+        for group_name in ROW_GROUP_ORDER:
+            if any(group == group_name for group, _ in selected):
+                ordered_groups.append(group_name)
+        for group_name, _ in selected:
+            if group_name not in ordered_groups:
+                ordered_groups.append(group_name)
+
+        cols_per_class = 1 + n_sigma
+        single_n_rows = len(ordered_groups)
+        class_block_starts: list[int] = []
+        width_ratios: list[float] = []
+        col_cursor = 0
+        for class_idx in range(len(ordered_classes)):
+            class_block_starts.append(col_cursor)
+            width_ratios.extend([1.0] * cols_per_class)
+            col_cursor += cols_per_class
+            if class_idx < len(ordered_classes) - 1:
+                width_ratios.append(SINGLE_GROUP_SPACER_RATIO)
+                col_cursor += 1
+        single_n_cols = col_cursor
+        fig_single, axes_single = plt.subplots(
+            single_n_rows,
+            single_n_cols,
+            figsize=(SINGLE_TILE_WIDTH * single_n_cols, 2.7 * single_n_rows),
+            gridspec_kw={"width_ratios": width_ratios},
+        )
+        if single_n_rows == 1:
+            axes_single = np.array([axes_single])
+        if single_n_cols == 1:
+            axes_single = axes_single[:, np.newaxis]
+
+        for class_idx in range(len(ordered_classes) - 1):
+            spacer_col = class_block_starts[class_idx] + cols_per_class
+            for row_idx in range(single_n_rows):
+                axes_single[row_idx, spacer_col].axis("off")
+
+        selected_row_lookup: dict[tuple[str, str], int] = {}
+        for row_idx, (group_name, idx) in enumerate(selected):
+            label_name = build_label_name(idx, labels[idx], label_names, class_names)
+            selected_row_lookup[(group_name, label_name)] = row_idx
+
+        def add_single_column_labels(fig_single_local: plt.Figure) -> None:
+            y_top = axes_single[0, 0].get_position().y1
+            label_y = min(y_top + 0.05, 0.99)
+            for class_idx, class_name in enumerate(ordered_classes):
+                display_class = CLASS_LABEL_DISPLAY.get(class_name, class_name)
+                block_start = class_block_starts[class_idx]
+                original_bbox = axes_single[0, block_start].get_position()
+                fig_single_local.text(
+                    (original_bbox.x0 + original_bbox.x1) / 2,
+                    label_y,
+                    display_class,
+                    ha="center",
+                    va="top",
+                    fontsize=FONT_SIZE,
+                )
+                for sigma_idx, sigma in enumerate(sigma_order):
+                    bbox = axes_single[0, block_start + 1 + sigma_idx].get_position()
+                    fig_single_local.text(
+                        (bbox.x0 + bbox.x1) / 2,
+                        label_y,
+                        f"{method_name} {format_sigma_label(sigma)}",
+                        ha="center",
+                        va="top",
+                        fontsize=FONT_SIZE,
+                    )
+
+        def add_single_row_labels(fig_single_local: plt.Figure) -> None:
+            for row_idx, group_name in enumerate(ordered_groups):
+                display_group = GROUP_LABEL_DISPLAY.get(group_name, group_name)
+                bbox = axes_single[row_idx, 0].get_position()
+                fig_single_local.text(
+                    bbox.x0 - 0.01,
+                    (bbox.y0 + bbox.y1) / 2,
+                    display_group,
+                    ha="right",
+                    va="center",
+                    rotation=90,
+                    fontsize=FONT_SIZE,
+                )
+
+        def add_single_separator(fig_single_local: plt.Figure) -> None:
+            top = axes_single[0, 0].get_position().y1
+            bottom = axes_single[-1, 0].get_position().y0
+            for class_idx in range(1, len(ordered_classes)):
+                spacer_col = class_block_starts[class_idx] - 1
+                spacer_bbox = axes_single[0, spacer_col].get_position()
+                x = (spacer_bbox.x0 + spacer_bbox.x1) / 2
+                fig_single_local.add_artist(
+                    plt.Line2D(
+                        [x, x],
+                        [bottom, top],
+                        transform=fig_single_local.transFigure,
+                        color=SEPARATOR_COLOR,
+                        linewidth=SEPARATOR_LW,
+                        zorder=1000,
+                        clip_on=False,
+                    )
+                )
+
+        for row_idx, group_name in enumerate(ordered_groups):
+            for class_idx, class_name in enumerate(ordered_classes):
+                lookup_row = selected_row_lookup.get((group_name, class_name))
+                original_col = class_block_starts[class_idx]
+                method_cols = [original_col + 1 + sigma_idx for sigma_idx in range(n_sigma)]
+
+                if lookup_row is None:
+                    axes_single[row_idx, original_col].axis("off")
+                    for col in method_cols:
+                        axes_single[row_idx, col].axis("off")
+                    continue
+
+                _, idx = selected[lookup_row]
+                image = images[idx]
+                epi = float(epi_values[idx])
+                img = image.squeeze(0).permute(1, 2, 0).numpy()
+                img = (img * 0.5 + 0.5)
+                img = np.clip(img, 0, 1)
+
+                axes_single[row_idx, original_col].imshow(img)
+                axes_single[row_idx, original_col].axis("off")
+                axes_single[row_idx, original_col].set_title("", fontsize=FONT_SIZE)
+                add_text_box(axes_single[row_idx, original_col], f"epi={epi:.4f}")
+
+                for sigma_idx, col in enumerate(method_cols):
+                    attr = attr_rows[lookup_row][sigma_idx][attr_index]
+                    attr_vis = prepare_heatmap_for_display(attr)
+                    ax = axes_single[row_idx, col]
+                    if HEATMAP_BLEND_ON_IMAGE:
+                        ax.imshow(img)
+                    ax.imshow(
+                        attr_vis,
+                        cmap=HEATMAP_CMAP,
+                        vmin=vmin,
+                        vmax=vmax,
+                        interpolation=HEATMAP_INTERPOLATION,
+                        alpha=HEATMAP_ALPHA if HEATMAP_BLEND_ON_IMAGE else 1.0,
+                    )
+                    ax.axis("off")
+
+                    if clean_sigma_idx is None or sigma_idx == clean_sigma_idx:
+                        ssim_value = None
+                    else:
+                        clean_attr = attr_rows[lookup_row][clean_sigma_idx][attr_index]
+                        ssim_value = compute_ssim(clean_attr, attr)
+                    add_ssim_box(ax, ssim_value)
+
+        plt.tight_layout()
+        fig_single.subplots_adjust(
+            wspace=SINGLE_SUBPLOT_WSPACE,
+            top=SINGLE_SUBPLOT_TOP,
+            left=SUBPLOT_LEFT,
+        )
+        add_single_column_labels(fig_single)
+        add_single_row_labels(fig_single)
+        add_single_separator(fig_single)
+        save_figure(fig_single, build_output_path(out_suffix))
+        plt.close(fig_single)
+
+    render_single_method("IG", 0, ig_vmin, ig_vmax, "_ig")
+    render_single_method("SG", 1, sg_vmin, sg_vmax, "_sg")
 
 
 def main() -> None:
