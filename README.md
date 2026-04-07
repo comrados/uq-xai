@@ -2,14 +2,14 @@
 
 This repository accompanies the paper "Uncertainty Gating for Cost-Aware Explainable Artificial Intelligence".
 
-Citation (placeholder):
+Citation:
 
 ```bibtex
-@article{placeholder,
-  title={Paper Title Placeholder},
-  author={Author, A. and Author, B.},
-  journal={Venue Placeholder},
-  year={20XX}
+@article{mikriukov2026uncertainty,
+  title={Uncertainty Gating for Cost-Aware Explainable Artificial Intelligence},
+  author={Mikriukov, Georgii and Montavon, Gr{\'e}goire and H{\"o}hne, Marina M-C},
+  journal={arXiv preprint arXiv:2603.29915},
+  year={2026}
 }
 ```
 
