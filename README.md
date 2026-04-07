@@ -1,8 +1,6 @@
-# UQ-XAI
+# Uncertainty Gating for Cost-Aware Explainable Artificial Intelligence
 
-This repository accompanies the paper "Uncertainty Gating for Cost-Aware Explainable Artificial Intelligence".
-
-Citation:
+> Mikriukov, Georgii, Grégoire Montavon, and Marina M-C. Höhne. "Uncertainty Gating for Cost-Aware Explainable Artificial Intelligence." arXiv preprint arXiv:2603.29915 (2026).
 
 ```bibtex
 @article{mikriukov2026uncertainty,
